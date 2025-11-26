@@ -1,9 +1,9 @@
-export default function handler(req: any, res: any) {
-  res.status(200).json({
-    message: 'Hello from Bini.js TypeScript!',
-    timestamp: new Date().toISOString(),
-    method: req.method,
-    working: true,
-    typeScript: true
+// src/app/api/hello.ts
+import { VercelRequest, VercelResponse } from '@vercel/node';
+
+export default function handler(req: VercelRequest, res: VercelResponse) {
+  res.status(200).json({ 
+    message: 'Hello from API!',
+    timestamp: new Date().toISOString()
   });
 }
