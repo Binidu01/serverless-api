@@ -15,7 +15,7 @@ if (fs.existsSync(outputDir)) {
 fs.mkdirSync(functionsDir, { recursive: true });
 fs.mkdirSync(staticDir, { recursive: true });
 
-// Copy dist to static
+// Copy dist to static (frontend)
 const distDir = path.join(process.cwd(), 'dist');
 if (fs.existsSync(distDir)) {
   const copyDir = (src, dest) => {
@@ -31,12 +31,16 @@ if (fs.existsSync(distDir)) {
     });
   };
   copyDir(distDir, staticDir);
+  console.log('✅ Frontend copied to static/');
 }
 
 // Build API functions
+const routes = [];
 if (fs.existsSync(srcApiDir)) {
   const apiFiles = fs.readdirSync(srcApiDir).filter(f => /\.(js|ts|mjs)$/.test(f));
   
+  console.log(`📦 Building ${apiFiles.length} API routes...\n`);
+
   apiFiles.forEach(file => {
     const routeName = path.basename(file, path.extname(file));
     const functionDir = path.join(functionsDir, `${routeName}.func`);
@@ -81,14 +85,31 @@ module.exports = handler;
     };
     fs.writeFileSync(path.join(functionDir, '.vc-config.json'), JSON.stringify(vcConfig, null, 2));
 
+    // Add routing rule for this API
+    routes.push({
+      src: `/api/${routeName}(?:/)?$`,
+      dest: `/api/${routeName}.func`,
+    });
+
     console.log(`  ✅ ${routeName}`);
   });
 }
 
-// Create config.json
+// Add catch-all route for SPA (must be last)
+routes.push({
+  handle: 'filesystem',
+});
+routes.push({
+  src: '/(.*)',
+  dest: '/index.html',
+  status: 200,
+});
+
+// Create config.json with routes
 const config = {
   version: 3,
+  routes,
 };
 fs.writeFileSync(path.join(outputDir, 'config.json'), JSON.stringify(config, null, 2));
 
-console.log('\n🚀 Build Output API ready in: .vercel/output/\n');
+console.log(`\n🚀 Build Output API ready in: .vercel/output/\n`);
