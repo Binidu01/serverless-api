@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "scripts": {
     "dev": "vite --host --open",
-    "build": "vite build && node bini/scripts/build-api.js",
+    "build": "vite build && node bini/scripts/build-api-vercel.js",
     "start": "node api-server.js",
     "preview": "vite preview --host --open",
     "type-check": "tsc --noEmit",
