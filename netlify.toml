@@ -1,18 +1,15 @@
 [build]
   command = "npm run build"
-  functions = "netlify/functions"
+  functions = "dist/api"
   publish = "dist"
 
-# Redirect /api/* to /.netlify/functions/*
 [[redirects]]
   from = "/api/*"
   to = "/.netlify/functions/:splat"
   status = 200
-  force = true
 
-# SPA fallback
 [[redirects]]
   from = "/*"
   to = "/index.html"
   status = 200
-  conditions = { NOT = [{ Path = ["/.netlify/functions/*"] }] }
+  conditions = { NOT = [{ Cookie = ["nf_ab"] }] }
