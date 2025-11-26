@@ -2,6 +2,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import ts from 'typescript';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const srcApiDir = path.join(process.cwd(), 'src/app/api');
@@ -21,30 +22,58 @@ console.log(`📦 Building ${apiFiles.length} API routes...\n`);
 apiFiles.forEach(file => {
   const routeName = path.basename(file, path.extname(file));
   const outputPath = path.join(distApiDir, `${routeName}.js`);
-  const relativePath = `../../src/app/api/${file}`;
+  const srcPath = path.join(srcApiDir, file);
 
-  // Web Standard API wrapper
+  // Read the source file
+  let sourceCode = fs.readFileSync(srcPath, 'utf-8');
+
+  // If TypeScript, compile to JavaScript
+  if (file.endsWith('.ts')) {
+    const result = ts.transpileModule(sourceCode, {
+      compilerOptions: {
+        module: ts.ModuleKind.ESNext,
+        target: ts.ScriptTarget.ES2020,
+        jsx: ts.JsxEmit.React,
+        esModuleInterop: true,
+        allowSyntheticDefaultImports: true,
+      },
+    });
+    sourceCode = result.outputText;
+  }
+
+  // Extract handler - handle both function declarations and arrow functions
+  let handlerCode = sourceCode
+    .replace(/export\s+default\s+/, '')
+    .trim();
+
+  // If it's an inline export default, we need to extract it
+  if (!handlerCode.includes('function') && !handlerCode.includes('=>')) {
+    handlerCode = sourceCode.match(/export\s+default\s+(.*?)(?=;|$)/s)?.[1] || handlerCode;
+  }
+
+  // Web Standard API wrapper with inlined handler
   const wrapper = `// Generated serverless wrapper for ${file}
-import originalHandler from '${relativePath}';
+
+const handler = ${handlerCode};
 
 export async function GET(req) {
-  return await wrapHandler(req, 'GET', originalHandler);
+  return await wrapHandler(req, 'GET', handler);
 }
 
 export async function POST(req) {
-  return await wrapHandler(req, 'POST', originalHandler);
+  return await wrapHandler(req, 'POST', handler);
 }
 
 export async function PUT(req) {
-  return await wrapHandler(req, 'PUT', originalHandler);
+  return await wrapHandler(req, 'PUT', handler);
 }
 
 export async function DELETE(req) {
-  return await wrapHandler(req, 'DELETE', originalHandler);
+  return await wrapHandler(req, 'DELETE', handler);
 }
 
 export async function PATCH(req) {
-  return await wrapHandler(req, 'PATCH', originalHandler);
+  return await wrapHandler(req, 'PATCH', handler);
 }
 
 export async function OPTIONS(req) {
@@ -54,17 +83,17 @@ export async function OPTIONS(req) {
   });
 }
 
-async function wrapHandler(req, method, handler) {
+async function wrapHandler(req, method, handlerFn) {
   try {
     // Create Node.js style request
     const url = new URL(req.url);
     const nodeRequest = {
       method: method,
       headers: Object.fromEntries(req.headers),
-      body: method !== 'GET' && method !== 'DELETE' ? await req.json().catch(() => ({})) : {},
+      body: ['GET', 'DELETE', 'HEAD'].includes(method) ? {} : await req.json().catch(() => ({})),
       query: Object.fromEntries(url.searchParams),
       params: {},
-      ip: req.headers.get('x-forwarded-for') || req.headers.get('x-client-ip') || 'unknown',
+      ip: req.headers.get('x-forwarded-for') || req.headers.get('cf-connecting-ip') || req.headers.get('x-client-ip') || 'unknown',
       url: req.url
     };
 
@@ -96,20 +125,25 @@ async function wrapHandler(req, method, handler) {
 
     // Call original handler
     const result = await Promise.resolve().then(() => 
-      handler(nodeRequest, nodeResponse)
+      handlerFn(nodeRequest, nodeResponse)
     );
 
     // Return response
     const body = responseData || result;
     return new Response(JSON.stringify(body), {
       status: statusCode,
-      headers: responseHeaders
+      headers: {
+        'Content-Type': 'application/json',
+        ...responseHeaders
+      }
     });
 
   } catch (error) {
+    console.error('API Error:', error);
     return new Response(JSON.stringify({
       error: 'Internal Server Error',
-      message: error.message
+      message: error.message,
+      timestamp: new Date().toISOString()
     }), {
       status: 500,
       headers: { 'Content-Type': 'application/json' }
