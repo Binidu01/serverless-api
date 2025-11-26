@@ -4,7 +4,7 @@ import path from 'path';
 import ts from 'typescript';
 
 const srcApiDir = path.join(process.cwd(), 'src/app/api');
-const distApiDir = path.join(process.cwd(), 'api');
+const distApiDir = path.join(process.cwd(), 'dist/api');
 
 // Create api directory if it doesn't exist
 if (!fs.existsSync(distApiDir)) {
