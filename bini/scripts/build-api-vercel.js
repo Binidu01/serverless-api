@@ -4,37 +4,50 @@ import path from 'path';
 import ts from 'typescript';
 
 const srcApiDir = path.join(process.cwd(), 'src/app/api');
-const distApiDir = path.join(process.cwd(), 'dist/api');
+const outputDir = path.join(process.cwd(), '.vercel/output');
+const functionsDir = path.join(outputDir, 'functions');
+const staticDir = path.join(outputDir, 'static');
 
-// Create api directory if it doesn't exist
-if (!fs.existsSync(distApiDir)) {
-  fs.mkdirSync(distApiDir, { recursive: true });
+// Clean and create directories
+if (fs.existsSync(outputDir)) {
+  fs.rmSync(outputDir, { recursive: true });
+}
+fs.mkdirSync(functionsDir, { recursive: true });
+fs.mkdirSync(staticDir, { recursive: true });
+
+// Copy dist to static
+const distDir = path.join(process.cwd(), 'dist');
+if (fs.existsSync(distDir)) {
+  const copyDir = (src, dest) => {
+    if (!fs.existsSync(dest)) fs.mkdirSync(dest, { recursive: true });
+    fs.readdirSync(src).forEach(file => {
+      const srcFile = path.join(src, file);
+      const destFile = path.join(dest, file);
+      if (fs.statSync(srcFile).isDirectory()) {
+        copyDir(srcFile, destFile);
+      } else {
+        fs.copyFileSync(srcFile, destFile);
+      }
+    });
+  };
+  copyDir(distDir, staticDir);
 }
 
-// Check if source directory exists
-if (!fs.existsSync(srcApiDir)) {
-  console.error(`❌ Source directory not found: ${srcApiDir}`);
-  process.exit(1);
-}
+// Build API functions
+if (fs.existsSync(srcApiDir)) {
+  const apiFiles = fs.readdirSync(srcApiDir).filter(f => /\.(js|ts|mjs)$/.test(f));
+  
+  apiFiles.forEach(file => {
+    const routeName = path.basename(file, path.extname(file));
+    const functionDir = path.join(functionsDir, `${routeName}.func`);
+    const indexPath = path.join(functionDir, 'index.js');
 
-const apiFiles = fs.readdirSync(srcApiDir).filter(f => /\.(js|ts|mjs)$/.test(f));
+    fs.mkdirSync(functionDir, { recursive: true });
 
-if (apiFiles.length === 0) {
-  console.log('⚠️ No API files found in src/app/api');
-  process.exit(0);
-}
-
-console.log(`📦 Building ${apiFiles.length} serverless API routes...\n`);
-
-apiFiles.forEach(file => {
-  const routeName = path.basename(file, path.extname(file));
-  const outputPath = path.join(distApiDir, `${routeName}.js`);
-  const srcPath = path.join(srcApiDir, file);
-
-  try {
+    const srcPath = path.join(srcApiDir, file);
     let sourceCode = fs.readFileSync(srcPath, 'utf-8');
 
-    // Transpile TypeScript to JavaScript if needed
+    // Transpile TypeScript
     if (file.endsWith('.ts')) {
       const result = ts.transpileModule(sourceCode, {
         compilerOptions: {
@@ -48,23 +61,34 @@ apiFiles.forEach(file => {
       sourceCode = result.outputText;
     }
 
-    // Remove @vercel/node imports
+    // Clean up imports
     sourceCode = sourceCode.replace(/import\s+.*?from\s+['"]@vercel\/node['"];?\n?/g, '');
-
-    // Remove 'export default' if present, we'll add it back properly
     sourceCode = sourceCode.replace(/export\s+default\s+/g, '');
 
-    // Write the file with proper export
     const output = `${sourceCode}
 
-export default handler;
+module.exports = handler;
 `;
 
-    fs.writeFileSync(outputPath, output);
-    console.log(`  ✅ ${routeName}`);
-  } catch (error) {
-    console.error(`  ❌ Error building ${routeName}:`, error.message);
-  }
-});
+    fs.writeFileSync(indexPath, output);
 
-console.log(`\n🚀 Vercel Functions ready in: api/\n`);
+    // Create .vc-config.json for the function
+    const vcConfig = {
+      runtime: 'nodejs20.x',
+      handler: 'index.js',
+      lazyLoadingEnabled: false,
+      regions: ['iad1'],
+    };
+    fs.writeFileSync(path.join(functionDir, '.vc-config.json'), JSON.stringify(vcConfig, null, 2));
+
+    console.log(`  ✅ ${routeName}`);
+  });
+}
+
+// Create config.json
+const config = {
+  version: 3,
+};
+fs.writeFileSync(path.join(outputDir, 'config.json'), JSON.stringify(config, null, 2));
+
+console.log('\n🚀 Build Output API ready in: .vercel/output/\n');
