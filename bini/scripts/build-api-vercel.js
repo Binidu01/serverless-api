@@ -48,23 +48,19 @@ apiFiles.forEach(file => {
       sourceCode = result.outputText;
     }
 
-    // Remove @vercel/node imports (not needed for basic handlers)
+    // Remove @vercel/node imports
     sourceCode = sourceCode.replace(/import\s+.*?from\s+['"]@vercel\/node['"];?\n?/g, '');
 
-    // Extract the handler function
-    // This handles: export default function handler() or export default (req, res) => {}
-    const defaultExportMatch = sourceCode.match(/export\s+default\s+(function\s+\w+\s*\(|[^{]*\{[\s\S]*?\}|async\s*\([\s\S]*?\)\s*=>[\s\S]*?\})/);
-    
-    if (defaultExportMatch) {
-      sourceCode = defaultExportMatch[1];
-    }
+    // Remove 'export default' if present, we'll add it back properly
+    sourceCode = sourceCode.replace(/export\s+default\s+/g, '');
 
-    // Create the wrapper
-    const wrapper = `// Vercel Serverless Function for ${file}
-export default ${sourceCode}
+    // Write the file with proper export
+    const output = `${sourceCode}
+
+export default handler;
 `;
 
-    fs.writeFileSync(outputPath, wrapper);
+    fs.writeFileSync(outputPath, output);
     console.log(`  ✅ ${routeName}`);
   } catch (error) {
     console.error(`  ❌ Error building ${routeName}:`, error.message);
