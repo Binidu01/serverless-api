@@ -95,14 +95,13 @@ module.exports = handler;
   });
 }
 
-// Add catch-all route for SPA (must be last)
+// Add routes in correct order: API first, then filesystem check, then SPA fallback
 routes.push({
   handle: 'filesystem',
 });
 routes.push({
   src: '/(.*)',
   dest: '/index.html',
-  status: 200,
 });
 
 // Create config.json with routes
