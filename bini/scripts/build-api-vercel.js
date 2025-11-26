@@ -20,6 +20,9 @@ apiFiles.forEach(file => {
 
   let sourceCode = fs.readFileSync(srcPath, 'utf-8');
 
+  // Remove the import statement since we'll handle it differently
+  sourceCode = sourceCode.replace(/import\s+.*?from\s+['"]@vercel\/node['"];?/g, '');
+
   if (file.endsWith('.ts')) {
     const result = ts.transpileModule(sourceCode, {
       compilerOptions: {
@@ -27,79 +30,18 @@ apiFiles.forEach(file => {
         target: ts.ScriptTarget.ES2020,
         esModuleInterop: true,
         allowSyntheticDefaultImports: true,
+        skipLibCheck: true,
       },
     });
     sourceCode = result.outputText;
   }
 
   const wrapper = `// Vercel Serverless Function for ${file}
-const handlerModule = {};
-(function() {
-  const exports = handlerModule;
-  const module = { exports: handlerModule };
-  
+const handler = (req, res) => {
   ${sourceCode}
-  
-  if (!handlerModule.default && typeof module.exports === 'function') {
-    handlerModule.default = module.exports;
-  }
-})();
-
-const originalHandler = handlerModule.default || handlerModule.handler;
-if (!originalHandler || typeof originalHandler !== 'function') {
-  throw new Error('Handler not found or not a function');
-}
-
-export default async (req, res) => {
-  try {
-    // Create a mock response object with chainable methods
-    let statusCode = 200;
-    let responseHeaders = { 'Content-Type': 'application/json' };
-    let responseBody = null;
-    let sent = false;
-
-    const mockRes = {
-      status: (code) => {
-        statusCode = code;
-        return mockRes;
-      },
-      setHeader: (name, value) => {
-        responseHeaders[name] = value;
-        return mockRes;
-      },
-      json: (data) => {
-        responseBody = data;
-        sent = true;
-      },
-      send: (data) => {
-        responseBody = data;
-        sent = true;
-      },
-      end: (data) => {
-        if (data) responseBody = data;
-        sent = true;
-      }
-    };
-
-    const result = await Promise.resolve().then(() => originalHandler(req, mockRes));
-
-    // If nothing was sent via mockRes methods, use the return value
-    const finalBody = sent ? responseBody : result;
-
-    res.status(statusCode);
-    Object.entries(responseHeaders).forEach(([key, value]) => {
-      res.setHeader(key, value);
-    });
-    res.json(finalBody || {});
-  } catch (error) {
-    console.error('API Error:', error);
-    res.status(500).json({
-      error: 'Internal Server Error',
-      message: error.message,
-      timestamp: new Date().toISOString()
-    });
-  }
 };
+
+export default handler;
 `;
 
   fs.writeFileSync(outputPath, wrapper);
