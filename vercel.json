@@ -5,14 +5,21 @@
   "env": {
     "NODE_ENV": "production"
   },
-  "rewrites": [
+  "functions": {
+    "api/*.js": {
+      "runtime": "nodejs18.x",
+      "maxDuration": 60,
+      "memory": 1024
+    }
+  },
+  "routes": [
     {
-      "source": "/api/(.*)",
-      "destination": "/api/$1.js"
+      "src": "/api/(?<path>.*)",
+      "dest": "/api/$path.js"
     },
     {
-      "source": "/(.*)",
-      "destination": "/index.html"
+      "src": "/(.*)",
+      "dest": "/index.html"
     }
   ]
 }
