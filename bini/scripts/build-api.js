@@ -22,7 +22,7 @@ apiFiles.forEach(file => {
   // Read source
   let sourceCode = fs.readFileSync(srcPath, 'utf-8');
 
-  // Compile TypeScript to JavaScript
+  // Compile TypeScript to JavaScript if needed
   if (file.endsWith('.ts')) {
     const result = ts.transpileModule(sourceCode, {
       compilerOptions: {
@@ -35,32 +35,35 @@ apiFiles.forEach(file => {
     sourceCode = result.outputText;
   }
 
-  // Extract the function body - handle both arrow functions and function declarations
-  let handlerCode = sourceCode;
-
-  // Remove CommonJS exports
-  handlerCode = handlerCode.replace(/exports\.default\s*=\s*/, '');
-  handlerCode = handlerCode.replace(/module\.exports\s*=\s*/, '');
-  handlerCode = handlerCode.replace(/export\s+default\s+/, '');
-
-  // Trim
-  handlerCode = handlerCode.trim();
-
-  // Remove trailing semicolon if it exists
-  if (handlerCode.endsWith(';')) {
-    handlerCode = handlerCode.slice(0, -1);
-  }
-
-  // Generate Netlify Function wrapper (CommonJS format for Netlify)
+  // CRITICAL FIX: Wrap transpiled code in a function to extract the handler
   const wrapper = `// Netlify Function for ${file}
-const originalHandler = ${handlerCode};
+
+// Execute the source code to get the handler
+const handlerModule = {};
+(function() {
+  const exports = handlerModule;
+  const module = { exports: handlerModule };
+  
+  ${sourceCode}
+  
+  // Make sure we have a handler
+  if (!handlerModule.default && typeof module.exports === 'function') {
+    handlerModule.default = module.exports;
+  }
+})();
+
+const originalHandler = handlerModule.default || handlerModule.handler;
+
+if (!originalHandler || typeof originalHandler !== 'function') {
+  throw new Error('Handler not found or not a function');
+}
 
 exports.handler = async (event, context) => {
   try {
     // Parse request
     const method = event.httpMethod || 'GET';
     const headers = event.headers || {};
-    const path = event.path || '/';
+    const pathname = event.path || '/';
     
     let body = {};
     if (event.body) {
@@ -81,14 +84,13 @@ exports.handler = async (event, context) => {
       query: queryParams,
       params: {},
       ip: headers['x-forwarded-for'] || headers['client-ip'] || 'unknown',
-      url: path
+      url: pathname
     };
 
     // Response handler
     let statusCode = 200;
     let responseHeaders = { 'Content-Type': 'application/json' };
     let responseBody = null;
-    let responded = false;
 
     const res = {
       status: (code) => {
@@ -101,15 +103,12 @@ exports.handler = async (event, context) => {
       },
       json: (data) => {
         responseBody = data;
-        responded = true;
       },
       send: (data) => {
         responseBody = data;
-        responded = true;
       },
       end: (data) => {
         if (data) responseBody = data;
-        responded = true;
       }
     };
 
