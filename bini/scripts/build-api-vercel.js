@@ -1,10 +1,10 @@
-// #!/usr/bin/env node
+#!/usr/bin/env node
 import fs from 'fs';
 import path from 'path';
 import ts from 'typescript';
 
 const srcApiDir = path.join(process.cwd(), 'src/app/api');
-const distApiDir = path.join(process.cwd(), 'api'); // Change to 'api' for Vercel
+const distApiDir = path.join(process.cwd(), 'api');
 
 if (!fs.existsSync(distApiDir)) {
   fs.mkdirSync(distApiDir, { recursive: true });
@@ -32,7 +32,6 @@ apiFiles.forEach(file => {
     sourceCode = result.outputText;
   }
 
-  // VERCEL FORMAT
   const wrapper = `// Vercel Serverless Function for ${file}
 const handlerModule = {};
 (function() {
@@ -53,56 +52,45 @@ if (!originalHandler || typeof originalHandler !== 'function') {
 
 export default async (req, res) => {
   try {
-    const method = req.method || 'GET';
-    const headers = req.headers || {};
-    
-    let body = {};
-    if (req.body) {
-      try {
-        body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
-      } catch (e) {
-        body = {};
-      }
-    }
-
-    const request = {
-      method,
-      headers,
-      body,
-      query: req.query || {},
-      params: req.params || {},
-      ip: headers['x-forwarded-for'] || headers['client-ip'] || 'unknown',
-      url: req.url
-    };
-
+    // Create a mock response object with chainable methods
     let statusCode = 200;
     let responseHeaders = { 'Content-Type': 'application/json' };
     let responseBody = null;
+    let sent = false;
 
-    const response = {
+    const mockRes = {
       status: (code) => {
         statusCode = code;
-        return response;
+        return mockRes;
       },
       setHeader: (name, value) => {
         responseHeaders[name] = value;
-        return response;
+        return mockRes;
       },
       json: (data) => {
         responseBody = data;
+        sent = true;
       },
       send: (data) => {
         responseBody = data;
+        sent = true;
       },
       end: (data) => {
         if (data) responseBody = data;
+        sent = true;
       }
     };
 
-    const result = await Promise.resolve().then(() => originalHandler(request, response));
-    const finalBody = responseBody !== null ? responseBody : result;
+    const result = await Promise.resolve().then(() => originalHandler(req, mockRes));
 
-    res.status(statusCode).setHeader('Content-Type', 'application/json').json(finalBody || {});
+    // If nothing was sent via mockRes methods, use the return value
+    const finalBody = sent ? responseBody : result;
+
+    res.status(statusCode);
+    Object.entries(responseHeaders).forEach(([key, value]) => {
+      res.setHeader(key, value);
+    });
+    res.json(finalBody || {});
   } catch (error) {
     console.error('API Error:', error);
     res.status(500).json({
