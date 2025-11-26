@@ -1,156 +1,137 @@
 #!/usr/bin/env node
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
 import ts from 'typescript';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const srcApiDir = path.join(process.cwd(), 'src/app/api');
 const distApiDir = path.join(process.cwd(), 'dist/api');
 
-// Create output directory
 if (!fs.existsSync(distApiDir)) {
   fs.mkdirSync(distApiDir, { recursive: true });
 }
 
-// Get all API files
-const apiFiles = fs.readdirSync(srcApiDir)
-  .filter(f => /\.(js|ts|mjs)$/.test(f));
+const apiFiles = fs.readdirSync(srcApiDir).filter(f => /\.(js|ts|mjs)$/.test(f));
 
-console.log(`📦 Building ${apiFiles.length} API routes...\n`);
+console.log(`📦 Building ${apiFiles.length} serverless API routes...\n`);
 
 apiFiles.forEach(file => {
   const routeName = path.basename(file, path.extname(file));
   const outputPath = path.join(distApiDir, `${routeName}.js`);
   const srcPath = path.join(srcApiDir, file);
 
-  try {
-    // Read the source file
-    let sourceCode = fs.readFileSync(srcPath, 'utf-8');
+  // Read source
+  let sourceCode = fs.readFileSync(srcPath, 'utf-8');
 
-    // If TypeScript, compile to JavaScript
-    if (file.endsWith('.ts')) {
-      const result = ts.transpileModule(sourceCode, {
-        compilerOptions: {
-          module: ts.ModuleKind.ESNext,
-          target: ts.ScriptTarget.ES2020,
-          jsx: ts.JsxEmit.React,
-          esModuleInterop: true,
-          allowSyntheticDefaultImports: true,
-        },
-      });
-      sourceCode = result.outputText;
+  // Compile TypeScript to JavaScript
+  if (file.endsWith('.ts')) {
+    const result = ts.transpileModule(sourceCode, {
+      compilerOptions: {
+        module: ts.ModuleKind.CommonJS,
+        target: ts.ScriptTarget.ES2020,
+        esModuleInterop: true,
+        allowSyntheticDefaultImports: true,
+      },
+    });
+    sourceCode = result.outputText;
+  }
+
+  // Extract handler code (remove export default)
+  const handlerCode = sourceCode.replace(/export\s+default\s+/, '').trim();
+
+  // Generate Netlify Function wrapper (CommonJS format for Netlify)
+  const wrapper = `// Netlify Function for ${file}
+const originalHandler = ${handlerCode};
+
+exports.handler = async (event, context) => {
+  try {
+    // Parse request
+    const method = event.httpMethod;
+    const headers = event.headers || {};
+    const path = event.path || '/';
+    
+    let body = {};
+    if (event.body) {
+      try {
+        body = JSON.parse(event.body);
+      } catch (e) {
+        body = {};
+      }
     }
 
-    // Extract the handler code (remove export default)
-    let handlerCode = sourceCode.replace(/export\s+default\s+/, '').trim();
+    const queryParams = event.queryStringParameters || {};
 
-    // Web Standard API wrapper with inlined handler
-    const wrapper = `// Generated serverless wrapper for ${file}
-
-const handler = ${handlerCode};
-
-export async function GET(req) {
-  return await wrapHandler(req, 'GET', handler);
-}
-
-export async function POST(req) {
-  return await wrapHandler(req, 'POST', handler);
-}
-
-export async function PUT(req) {
-  return await wrapHandler(req, 'PUT', handler);
-}
-
-export async function DELETE(req) {
-  return await wrapHandler(req, 'DELETE', handler);
-}
-
-export async function PATCH(req) {
-  return await wrapHandler(req, 'PATCH', handler);
-}
-
-export async function OPTIONS(req) {
-  return new Response(null, { 
-    status: 204,
-    headers: { 'Allow': 'GET, POST, PUT, DELETE, PATCH, OPTIONS' }
-  });
-}
-
-async function wrapHandler(req, method, handlerFn) {
-  try {
-    // Create Node.js style request
-    const url = new URL(req.url);
-    const nodeRequest = {
-      method: method,
-      headers: Object.fromEntries(req.headers),
-      body: ['GET', 'DELETE', 'HEAD'].includes(method) ? {} : await req.json().catch(() => ({})),
-      query: Object.fromEntries(url.searchParams),
+    // Create Node.js style request object
+    const req = {
+      method,
+      headers,
+      body,
+      query: queryParams,
       params: {},
-      ip: req.headers.get('x-forwarded-for') || req.headers.get('cf-connecting-ip') || req.headers.get('x-client-ip') || 'unknown',
-      url: req.url
+      ip: headers['x-forwarded-for'] || headers['client-ip'] || 'unknown',
+      url: path
     };
 
-    // Response accumulator
+    // Response handler
     let statusCode = 200;
     let responseHeaders = { 'Content-Type': 'application/json' };
-    let responseData = null;
+    let responseBody = null;
 
-    // Node.js style response
-    const nodeResponse = {
+    const res = {
       status: (code) => {
         statusCode = code;
-        return nodeResponse;
+        return res;
       },
       setHeader: (name, value) => {
         responseHeaders[name] = value;
-        return nodeResponse;
+        return res;
       },
       json: (data) => {
-        responseData = data;
+        responseBody = JSON.stringify(data);
       },
       send: (data) => {
-        responseData = data;
+        if (typeof data === 'object') {
+          responseBody = JSON.stringify(data);
+        } else {
+          responseBody = data;
+        }
       },
       end: (data) => {
-        responseData = data;
+        if (data) {
+          if (typeof data === 'object') {
+            responseBody = JSON.stringify(data);
+          } else {
+            responseBody = data;
+          }
+        }
       }
     };
 
     // Call original handler
-    const result = await Promise.resolve().then(() => 
-      handlerFn(nodeRequest, nodeResponse)
-    );
+    const result = await Promise.resolve().then(() => originalHandler(req, res));
 
-    // Return response
-    const body = responseData || result;
-    return new Response(JSON.stringify(body), {
-      status: statusCode,
-      headers: {
-        'Content-Type': 'application/json',
-        ...responseHeaders
-      }
-    });
+    // Return Netlify Function response
+    return {
+      statusCode,
+      headers: responseHeaders,
+      body: responseBody || JSON.stringify(result || {})
+    };
 
   } catch (error) {
     console.error('API Error:', error);
-    return new Response(JSON.stringify({
-      error: 'Internal Server Error',
-      message: error.message,
-      timestamp: new Date().toISOString()
-    }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' }
-    });
+    return {
+      statusCode: 500,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        error: 'Internal Server Error',
+        message: error.message
+      })
+    };
   }
-}
+};
 `;
 
-    fs.writeFileSync(outputPath, wrapper);
-    console.log(`  ✅ ${routeName}`);
-  } catch (error) {
-    console.error(`  ❌ ${routeName} - ${error.message}`);
-  }
+  fs.writeFileSync(outputPath, wrapper);
+  console.log(`  ✅ ${routeName}`);
 });
 
-console.log(`\n🚀 API routes ready in: dist/api/\n`);
+console.log(`\n🚀 Netlify Functions ready in: dist/api/\n`);
