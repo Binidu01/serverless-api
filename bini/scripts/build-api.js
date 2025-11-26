@@ -5,9 +5,14 @@ import ts from 'typescript';
 
 const srcApiDir = path.join(process.cwd(), 'src/app/api');
 const distApiDir = path.join(process.cwd(), 'dist/api');
+const netlifyFunctionsDir = path.join(process.cwd(), 'netlify/functions');
 
 if (!fs.existsSync(distApiDir)) {
   fs.mkdirSync(distApiDir, { recursive: true });
+}
+
+if (!fs.existsSync(netlifyFunctionsDir)) {
+  fs.mkdirSync(netlifyFunctionsDir, { recursive: true });
 }
 
 const apiFiles = fs.readdirSync(srcApiDir).filter(f => /\.(js|ts|mjs)$/.test(f));
@@ -16,11 +21,9 @@ console.log(`📦 Building ${apiFiles.length} serverless API routes...\n`);
 
 apiFiles.forEach(file => {
   const routeName = path.basename(file, path.extname(file));
-  const outputPath = path.join(distApiDir, `${routeName}.js`);
-  const srcPath = path.join(srcApiDir, file);
-
+  
   // Read source
-  let sourceCode = fs.readFileSync(srcPath, 'utf-8');
+  let sourceCode = fs.readFileSync(path.join(srcApiDir, file), 'utf-8');
 
   // Compile TypeScript to JavaScript if needed
   if (file.endsWith('.ts')) {
@@ -35,11 +38,13 @@ apiFiles.forEach(file => {
     sourceCode = result.outputText;
   }
 
-  // Generate universal wrapper that works on Vercel, Netlify, and local
-  const wrapper = `// Universal Serverless Function for ${file}
-// Works on: Vercel, Netlify, Cloudflare Workers, Local
-
-// Execute the source code to extract the handler
+  // ============================================
+  // NETLIFY: Create CommonJS-only version
+  // ============================================
+  const netlifyFile = path.join(netlifyFunctionsDir, `${routeName}.js`);
+  
+  const netlifyWrapper = `// Netlify Function for ${file}
+// Extract the handler by executing the source
 const handlerModule = {};
 (function() {
   const exports = handlerModule;
@@ -59,15 +64,6 @@ if (!originalHandler || typeof originalHandler !== 'function') {
   throw new Error('Handler not found or not a function');
 }
 
-// Helper function to convert Node.js response to Response object or Netlify format
-async function callHandler(req, res) {
-  const result = await Promise.resolve().then(() => originalHandler(req, res));
-  return result;
-}
-
-// ============================================
-// Netlify Functions (CommonJS exports)
-// ============================================
 exports.handler = async (event, context) => {
   try {
     const method = event.httpMethod || 'GET';
@@ -119,7 +115,7 @@ exports.handler = async (event, context) => {
       }
     };
 
-    const result = await callHandler(req, res);
+    const result = await Promise.resolve().then(() => originalHandler(req, res));
     const finalBody = responseBody !== null ? responseBody : result;
 
     return {
@@ -141,28 +137,34 @@ exports.handler = async (event, context) => {
     };
   }
 };
+`;
 
-// ============================================
-// Vercel Serverless Functions (ESM exports)
-// ============================================
-export async function GET(req) {
-  return handleRequest(req, 'GET');
-}
+  fs.writeFileSync(netlifyFile, netlifyWrapper);
 
-export async function POST(req) {
-  return handleRequest(req, 'POST');
-}
+  // ============================================
+  // VERCEL: Create ESM-only version in dist/api
+  // ============================================
+  const vercelFile = path.join(distApiDir, `${routeName}.js`);
+  
+  const vercelWrapper = `// Vercel Serverless Function for ${file}
+// Extract the handler by executing the source
+const handlerModule = {};
+(function() {
+  const exports = handlerModule;
+  const module = { exports: handlerModule };
+  
+  ${sourceCode}
+  
+  // Capture the exported handler
+  if (!handlerModule.default && typeof module.exports === 'function') {
+    handlerModule.default = module.exports;
+  }
+})();
 
-export async function PUT(req) {
-  return handleRequest(req, 'PUT');
-}
+const originalHandler = handlerModule.default || handlerModule.handler;
 
-export async function DELETE(req) {
-  return handleRequest(req, 'DELETE');
-}
-
-export async function PATCH(req) {
-  return handleRequest(req, 'PATCH');
+if (!originalHandler || typeof originalHandler !== 'function') {
+  throw new Error('Handler not found or not a function');
 }
 
 async function handleRequest(req, method) {
@@ -203,7 +205,7 @@ async function handleRequest(req, method) {
       }
     };
 
-    const result = await callHandler(nodeReq, nodeRes);
+    const result = await Promise.resolve().then(() => originalHandler(nodeReq, nodeRes));
     const body = responseData || result;
 
     return new Response(JSON.stringify(body), {
@@ -226,13 +228,33 @@ async function handleRequest(req, method) {
     });
   }
 }
+
+export async function GET(req) {
+  return handleRequest(req, 'GET');
+}
+
+export async function POST(req) {
+  return handleRequest(req, 'POST');
+}
+
+export async function PUT(req) {
+  return handleRequest(req, 'PUT');
+}
+
+export async function DELETE(req) {
+  return handleRequest(req, 'DELETE');
+}
+
+export async function PATCH(req) {
+  return handleRequest(req, 'PATCH');
+}
 `;
 
-  fs.writeFileSync(outputPath, wrapper);
-  console.log(`  ✅ ${routeName}`);
+  fs.writeFileSync(vercelFile, vercelWrapper);
+
+  console.log(\`  ✅ \${routeName}\`);
 });
 
-console.log(`\n🚀 Universal serverless API routes ready in: dist/api/\n`);
-console.log(`   ✅ Netlify: exports.handler (CommonJS)`);
-console.log(`   ✅ Vercel: export GET/POST/PUT/DELETE/PATCH (ESM)`);
-console.log(`   ✅ Local: Node.js server compatible\n`);
+console.log(\`\n🚀 Serverless API routes built:\n\`);
+console.log(\`   📂 Netlify:  netlify/functions/*.js (CommonJS)\`);
+console.log(\`   📂 Vercel:   dist/api/*.js (ESM)\n\`);
