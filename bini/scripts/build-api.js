@@ -35,8 +35,21 @@ apiFiles.forEach(file => {
     sourceCode = result.outputText;
   }
 
-  // Extract handler code (remove export default)
-  const handlerCode = sourceCode.replace(/export\s+default\s+/, '').trim();
+  // Extract the function body - handle both arrow functions and function declarations
+  let handlerCode = sourceCode;
+
+  // Remove CommonJS exports
+  handlerCode = handlerCode.replace(/exports\.default\s*=\s*/, '');
+  handlerCode = handlerCode.replace(/module\.exports\s*=\s*/, '');
+  handlerCode = handlerCode.replace(/export\s+default\s+/, '');
+
+  // Trim
+  handlerCode = handlerCode.trim();
+
+  // Remove trailing semicolon if it exists
+  if (handlerCode.endsWith(';')) {
+    handlerCode = handlerCode.slice(0, -1);
+  }
 
   // Generate Netlify Function wrapper (CommonJS format for Netlify)
   const wrapper = `// Netlify Function for ${file}
@@ -45,7 +58,7 @@ const originalHandler = ${handlerCode};
 exports.handler = async (event, context) => {
   try {
     // Parse request
-    const method = event.httpMethod;
+    const method = event.httpMethod || 'GET';
     const headers = event.headers || {};
     const path = event.path || '/';
     
@@ -75,6 +88,7 @@ exports.handler = async (event, context) => {
     let statusCode = 200;
     let responseHeaders = { 'Content-Type': 'application/json' };
     let responseBody = null;
+    let responded = false;
 
     const res = {
       status: (code) => {
@@ -86,34 +100,30 @@ exports.handler = async (event, context) => {
         return res;
       },
       json: (data) => {
-        responseBody = JSON.stringify(data);
+        responseBody = data;
+        responded = true;
       },
       send: (data) => {
-        if (typeof data === 'object') {
-          responseBody = JSON.stringify(data);
-        } else {
-          responseBody = data;
-        }
+        responseBody = data;
+        responded = true;
       },
       end: (data) => {
-        if (data) {
-          if (typeof data === 'object') {
-            responseBody = JSON.stringify(data);
-          } else {
-            responseBody = data;
-          }
-        }
+        if (data) responseBody = data;
+        responded = true;
       }
     };
 
     // Call original handler
     const result = await Promise.resolve().then(() => originalHandler(req, res));
 
+    // Use responseBody if set by res methods, otherwise use result
+    const finalBody = responseBody !== null ? responseBody : result;
+
     // Return Netlify Function response
     return {
       statusCode,
       headers: responseHeaders,
-      body: responseBody || JSON.stringify(result || {})
+      body: typeof finalBody === 'string' ? finalBody : JSON.stringify(finalBody || {})
     };
 
   } catch (error) {
@@ -123,7 +133,8 @@ exports.handler = async (event, context) => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         error: 'Internal Server Error',
-        message: error.message
+        message: error.message,
+        timestamp: new Date().toISOString()
       })
     };
   }
