@@ -24,35 +24,29 @@ apiFiles.forEach(file => {
   const outputPath = path.join(distApiDir, `${routeName}.js`);
   const srcPath = path.join(srcApiDir, file);
 
-  // Read the source file
-  let sourceCode = fs.readFileSync(srcPath, 'utf-8');
+  try {
+    // Read the source file
+    let sourceCode = fs.readFileSync(srcPath, 'utf-8');
 
-  // If TypeScript, compile to JavaScript
-  if (file.endsWith('.ts')) {
-    const result = ts.transpileModule(sourceCode, {
-      compilerOptions: {
-        module: ts.ModuleKind.ESNext,
-        target: ts.ScriptTarget.ES2020,
-        jsx: ts.JsxEmit.React,
-        esModuleInterop: true,
-        allowSyntheticDefaultImports: true,
-      },
-    });
-    sourceCode = result.outputText;
-  }
+    // If TypeScript, compile to JavaScript
+    if (file.endsWith('.ts')) {
+      const result = ts.transpileModule(sourceCode, {
+        compilerOptions: {
+          module: ts.ModuleKind.ESNext,
+          target: ts.ScriptTarget.ES2020,
+          jsx: ts.JsxEmit.React,
+          esModuleInterop: true,
+          allowSyntheticDefaultImports: true,
+        },
+      });
+      sourceCode = result.outputText;
+    }
 
-  // Extract handler - handle both function declarations and arrow functions
-  let handlerCode = sourceCode
-    .replace(/export\s+default\s+/, '')
-    .trim();
+    // Extract the handler code (remove export default)
+    let handlerCode = sourceCode.replace(/export\s+default\s+/, '').trim();
 
-  // If it's an inline export default, we need to extract it
-  if (!handlerCode.includes('function') && !handlerCode.includes('=>')) {
-    handlerCode = sourceCode.match(/export\s+default\s+(.*?)(?=;|$)/s)?.[1] || handlerCode;
-  }
-
-  // Web Standard API wrapper with inlined handler
-  const wrapper = `// Generated serverless wrapper for ${file}
+    // Web Standard API wrapper with inlined handler
+    const wrapper = `// Generated serverless wrapper for ${file}
 
 const handler = ${handlerCode};
 
@@ -152,8 +146,11 @@ async function wrapHandler(req, method, handlerFn) {
 }
 `;
 
-  fs.writeFileSync(outputPath, wrapper);
-  console.log(`  ✅ ${routeName}`);
+    fs.writeFileSync(outputPath, wrapper);
+    console.log(`  ✅ ${routeName}`);
+  } catch (error) {
+    console.error(`  ❌ ${routeName} - ${error.message}`);
+  }
 });
 
 console.log(`\n🚀 API routes ready in: dist/api/\n`);
