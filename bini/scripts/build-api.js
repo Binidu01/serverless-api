@@ -35,10 +35,11 @@ apiFiles.forEach(file => {
     sourceCode = result.outputText;
   }
 
-  // CRITICAL FIX: Wrap transpiled code in a function to extract the handler
-  const wrapper = `// Netlify Function for ${file}
+  // Generate universal wrapper that works on Vercel, Netlify, and local
+  const wrapper = `// Universal Serverless Function for ${file}
+// Works on: Vercel, Netlify, Cloudflare Workers, Local
 
-// Execute the source code to get the handler
+// Execute the source code to extract the handler
 const handlerModule = {};
 (function() {
   const exports = handlerModule;
@@ -46,7 +47,7 @@ const handlerModule = {};
   
   ${sourceCode}
   
-  // Make sure we have a handler
+  // Capture the exported handler
   if (!handlerModule.default && typeof module.exports === 'function') {
     handlerModule.default = module.exports;
   }
@@ -58,9 +59,17 @@ if (!originalHandler || typeof originalHandler !== 'function') {
   throw new Error('Handler not found or not a function');
 }
 
+// Helper function to convert Node.js response to Response object or Netlify format
+async function callHandler(req, res) {
+  const result = await Promise.resolve().then(() => originalHandler(req, res));
+  return result;
+}
+
+// ============================================
+// Netlify Functions (CommonJS exports)
+// ============================================
 exports.handler = async (event, context) => {
   try {
-    // Parse request
     const method = event.httpMethod || 'GET';
     const headers = event.headers || {};
     const pathname = event.path || '/';
@@ -76,7 +85,6 @@ exports.handler = async (event, context) => {
 
     const queryParams = event.queryStringParameters || {};
 
-    // Create Node.js style request object
     const req = {
       method,
       headers,
@@ -87,7 +95,6 @@ exports.handler = async (event, context) => {
       url: pathname
     };
 
-    // Response handler
     let statusCode = 200;
     let responseHeaders = { 'Content-Type': 'application/json' };
     let responseBody = null;
@@ -112,13 +119,9 @@ exports.handler = async (event, context) => {
       }
     };
 
-    // Call original handler
-    const result = await Promise.resolve().then(() => originalHandler(req, res));
-
-    // Use responseBody if set by res methods, otherwise use result
+    const result = await callHandler(req, res);
     const finalBody = responseBody !== null ? responseBody : result;
 
-    // Return Netlify Function response
     return {
       statusCode,
       headers: responseHeaders,
@@ -138,10 +141,98 @@ exports.handler = async (event, context) => {
     };
   }
 };
+
+// ============================================
+// Vercel Serverless Functions (ESM exports)
+// ============================================
+export async function GET(req) {
+  return handleRequest(req, 'GET');
+}
+
+export async function POST(req) {
+  return handleRequest(req, 'POST');
+}
+
+export async function PUT(req) {
+  return handleRequest(req, 'PUT');
+}
+
+export async function DELETE(req) {
+  return handleRequest(req, 'DELETE');
+}
+
+export async function PATCH(req) {
+  return handleRequest(req, 'PATCH');
+}
+
+async function handleRequest(req, method) {
+  try {
+    const url = new URL(req.url);
+    
+    const nodeReq = {
+      method: method,
+      headers: Object.fromEntries(req.headers),
+      body: ['GET', 'DELETE', 'HEAD'].includes(method) ? {} : await req.json().catch(() => ({})),
+      query: Object.fromEntries(url.searchParams),
+      params: {},
+      ip: req.headers.get('x-forwarded-for') || req.headers.get('cf-connecting-ip') || 'unknown',
+      url: req.url
+    };
+
+    let statusCode = 200;
+    let responseHeaders = { 'Content-Type': 'application/json' };
+    let responseData = null;
+
+    const nodeRes = {
+      status: (code) => {
+        statusCode = code;
+        return nodeRes;
+      },
+      setHeader: (name, value) => {
+        responseHeaders[name] = value;
+        return nodeRes;
+      },
+      json: (data) => {
+        responseData = data;
+      },
+      send: (data) => {
+        responseData = data;
+      },
+      end: (data) => {
+        responseData = data;
+      }
+    };
+
+    const result = await callHandler(nodeReq, nodeRes);
+    const body = responseData || result;
+
+    return new Response(JSON.stringify(body), {
+      status: statusCode,
+      headers: {
+        'Content-Type': 'application/json',
+        ...responseHeaders
+      }
+    });
+
+  } catch (error) {
+    console.error('API Error:', error);
+    return new Response(JSON.stringify({
+      error: 'Internal Server Error',
+      message: error.message,
+      timestamp: new Date().toISOString()
+    }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+}
 `;
 
   fs.writeFileSync(outputPath, wrapper);
   console.log(`  ✅ ${routeName}`);
 });
 
-console.log(`\n🚀 Netlify Functions ready in: dist/api/\n`);
+console.log(`\n🚀 Universal serverless API routes ready in: dist/api/\n`);
+console.log(`   ✅ Netlify: exports.handler (CommonJS)`);
+console.log(`   ✅ Vercel: export GET/POST/PUT/DELETE/PATCH (ESM)`);
+console.log(`   ✅ Local: Node.js server compatible\n`);
