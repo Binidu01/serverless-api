@@ -64,13 +64,12 @@ export default {
 fs.writeFileSync(path.join(process.cwd(), 'worker.js'), workerCode);
 console.log('✅ worker.js created');
 
-// Fixed wrangler.toml - removed conflicting site.entry-point
+// Complete wrangler.toml with all options to eliminate warnings
 const wranglerToml = `name = "${projectName}"
-compatibility_date = "2025-11-28"
 main = "worker.js"
-
-[env.production]
-vars = { ENVIRONMENT = "production" }
+compatibility_date = "2025-11-28"
+workers_dev = true
+preview_urls = true
 
 [site]
 bucket = "./dist"
