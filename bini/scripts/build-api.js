@@ -2,7 +2,6 @@
 import fs from 'fs';
 import path from 'path';
 import ts from 'typescript';
-import { execSync } from 'child_process';
 
 const srcApiDir = path.join(process.cwd(), 'src/app/api');
 const netlifyFunctionsDir = path.join(process.cwd(), 'netlify/functions');
@@ -262,47 +261,8 @@ export default {
   console.log(`     ☁️  Cloudflare: functions/${routeName}.js\n`);
 });
 
-console.log(`✨ API routes built!\n`);
+console.log(`✨ Build complete!\n`);
 console.log(`📂 Frontend: dist/\n`);
 console.log(`📁 Netlify Functions: netlify/functions/\n`);
 console.log(`📁 Cloudflare Functions: functions/\n`);
-
-// ============================================
-// AUTO-DEPLOYMENT TO BOTH PLATFORMS
-// ============================================
-
-console.log('🚀 Starting deployments to both platforms...\n');
-
-let netlifySuccess = false;
-let cloudflareSuccess = false;
-
-// Deploy to Netlify
-try {
-  console.log('📍 Deploying to Netlify...');
-  execSync('npx netlify deploy --prod --dir=dist --functions=netlify/functions', { stdio: 'inherit' });
-  console.log('✅ Netlify deployment successful!\n');
-  netlifySuccess = true;
-} catch (error) {
-  console.error('❌ Netlify deployment failed\n');
-}
-
-// Deploy to Cloudflare Pages
-try {
-  console.log('☁️  Deploying to Cloudflare Pages...');
-  execSync('wrangler pages deploy dist --compatibility-date=2025-11-28', { stdio: 'inherit' });
-  console.log('✅ Cloudflare Pages deployment successful!\n');
-  cloudflareSuccess = true;
-} catch (error) {
-  console.error('❌ Cloudflare Pages deployment failed\n');
-}
-
-// Summary
-console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-console.log('📊 Deployment Summary:\n');
-console.log(`  Netlify:          ${netlifySuccess ? '✅ Success' : '❌ Failed'}`);
-console.log(`  Cloudflare Pages: ${cloudflareSuccess ? '✅ Success' : '❌ Failed'}`);
-console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
-
-if (!netlifySuccess || !cloudflareSuccess) {
-  process.exit(1);
-}
+console.log(`🚀 Ready to push to GitHub! Both platforms will auto-deploy.\n`);
