@@ -1,80 +1,147 @@
 #!/usr/bin/env node
 import fs from 'fs';
 import path from 'path';
+import ts from 'typescript';
 
-const packageJsonPath = path.join(process.cwd(), 'package.json');
-let projectName = 'my-bini-app';
+const srcApiDir = path.join(process.cwd(), 'src/app/api');
+const distApiDir = path.join(process.cwd(), 'dist/api');
 
-if (fs.existsSync(packageJsonPath)) {
-  try {
-    const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'));
-    projectName = packageJson.name || projectName;
-  } catch (e) {
-    // Use default name
-  }
+if (!fs.existsSync(distApiDir)) {
+  fs.mkdirSync(distApiDir, { recursive: true });
 }
 
-// Create a simple worker that handles API routes and serves static files
-const workerCode = `// Cloudflare Worker for ${projectName}
-export default {
-  async fetch(request, env, ctx) {
-    const url = new URL(request.url);
-    const pathname = url.pathname;
+const apiFiles = fs.readdirSync(srcApiDir).filter(f => /\.(js|ts|mjs)$/.test(f));
+
+console.log(`📦 Building ${apiFiles.length} serverless API routes...\n`);
+
+apiFiles.forEach(file => {
+  const routeName = path.basename(file, path.extname(file));
+  const outputPath = path.join(distApiDir, `${routeName}.js`);
+  const srcPath = path.join(srcApiDir, file);
+
+  // Read source
+  let sourceCode = fs.readFileSync(srcPath, 'utf-8');
+
+  // Compile TypeScript to JavaScript if needed
+  if (file.endsWith('.ts')) {
+    const result = ts.transpileModule(sourceCode, {
+      compilerOptions: {
+        module: ts.ModuleKind.CommonJS,
+        target: ts.ScriptTarget.ES2020,
+        esModuleInterop: true,
+        allowSyntheticDefaultImports: true,
+      },
+    });
+    sourceCode = result.outputText;
+  }
+
+  // CRITICAL FIX: Wrap transpiled code in a function to extract the handler
+  const wrapper = `// Netlify Function for ${file}
+
+// Execute the source code to get the handler
+const handlerModule = {};
+(function() {
+  const exports = handlerModule;
+  const module = { exports: handlerModule };
+  
+  ${sourceCode}
+  
+  // Make sure we have a handler
+  if (!handlerModule.default && typeof module.exports === 'function') {
+    handlerModule.default = module.exports;
+  }
+})();
+
+const originalHandler = handlerModule.default || handlerModule.handler;
+
+if (!originalHandler || typeof originalHandler !== 'function') {
+  throw new Error('Handler not found or not a function');
+}
+
+exports.handler = async (event, context) => {
+  try {
+    // Parse request
+    const method = event.httpMethod || 'GET';
+    const headers = event.headers || {};
+    const pathname = event.path || '/';
     
-    // Handle API routes
-    if (pathname.startsWith('/api/')) {
-      const route = pathname.split('/').pop();
-      
-      if (route === 'hello') {
-        return new Response(
-          JSON.stringify({ 
-            message: 'Hello from Cloudflare Worker!',
-            timestamp: new Date().toISOString()
-          }),
-          { 
-            status: 200,
-            headers: { 
-              'Content-Type': 'application/json',
-              'Access-Control-Allow-Origin': '*'
-            }
-          }
-        );
+    let body = {};
+    if (event.body) {
+      try {
+        body = JSON.parse(event.body);
+      } catch (e) {
+        body = {};
       }
-      
-      return new Response(
-        JSON.stringify({ error: 'API route not found' }),
-        { 
-          status: 404, 
-          headers: { 'Content-Type': 'application/json' } 
-        }
-      );
     }
-    
-    // Pass all other requests to static site
-    return fetch(request);
+
+    const queryParams = event.queryStringParameters || {};
+
+    // Create Node.js style request object
+    const req = {
+      method,
+      headers,
+      body,
+      query: queryParams,
+      params: {},
+      ip: headers['x-forwarded-for'] || headers['client-ip'] || 'unknown',
+      url: pathname
+    };
+
+    // Response handler
+    let statusCode = 200;
+    let responseHeaders = { 'Content-Type': 'application/json' };
+    let responseBody = null;
+
+    const res = {
+      status: (code) => {
+        statusCode = code;
+        return res;
+      },
+      setHeader: (name, value) => {
+        responseHeaders[name] = value;
+        return res;
+      },
+      json: (data) => {
+        responseBody = data;
+      },
+      send: (data) => {
+        responseBody = data;
+      },
+      end: (data) => {
+        if (data) responseBody = data;
+      }
+    };
+
+    // Call original handler
+    const result = await Promise.resolve().then(() => originalHandler(req, res));
+
+    // Use responseBody if set by res methods, otherwise use result
+    const finalBody = responseBody !== null ? responseBody : result;
+
+    // Return Netlify Function response
+    return {
+      statusCode,
+      headers: responseHeaders,
+      body: typeof finalBody === 'string' ? finalBody : JSON.stringify(finalBody || {})
+    };
+
+  } catch (error) {
+    console.error('API Error:', error);
+    return {
+      statusCode: 500,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        error: 'Internal Server Error',
+        message: error.message,
+        timestamp: new Date().toISOString()
+      })
+    };
   }
 };
 `;
 
-// Write worker file
-fs.writeFileSync(path.join(process.cwd(), 'worker.js'), workerCode);
-console.log('✅ worker.js created');
+  fs.writeFileSync(outputPath, wrapper);
+  console.log(`  ✅ ${routeName}`);
+});
 
-// Complete wrangler.toml with all options to eliminate warnings
-const wranglerToml = `name = "${projectName}"
-main = "worker.js"
-compatibility_date = "2025-11-28"
-workers_dev = true
-preview_urls = true
-
-[site]
-bucket = "./dist"
-`;
-
-fs.writeFileSync(path.join(process.cwd(), 'wrangler.toml'), wranglerToml);
-console.log('✅ wrangler.toml generated');
-
-console.log('\n✨ Build complete!');
-console.log('📁 Frontend: dist/');
-console.log('🔗 API endpoint: /api/hello');
-console.log('\n🚀 To deploy: npx wrangler deploy');
+console.log(`\n🚀 Netlify Functions ready in: dist/api/\n`);
