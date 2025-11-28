@@ -20,7 +20,7 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const pathname = url.pathname;
-
+    
     // Handle API routes
     if (pathname.startsWith('/api/')) {
       const route = pathname.split('/').pop();
@@ -49,7 +49,7 @@ export default {
         }
       );
     }
-
+    
     // For static assets, we'll use the site feature
     // This requires the [site] configuration in wrangler.toml
     return new Response('Static site should be served via [site] configuration', {
@@ -64,7 +64,7 @@ export default {
 fs.writeFileSync(path.join(process.cwd(), 'worker.js'), workerCode);
 console.log('✅ worker.js created');
 
-// Fixed wrangler.toml with proper TOML syntax
+// Fixed wrangler.toml - removed conflicting site.entry-point
 const wranglerToml = `name = "${projectName}"
 compatibility_date = "2025-11-28"
 main = "worker.js"
@@ -74,7 +74,6 @@ vars = { ENVIRONMENT = "production" }
 
 [site]
 bucket = "./dist"
-entry-point = "workers-site"
 `;
 
 fs.writeFileSync(path.join(process.cwd(), 'wrangler.toml'), wranglerToml);
