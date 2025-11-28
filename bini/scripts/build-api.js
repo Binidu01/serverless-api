@@ -2,25 +2,6 @@
 import fs from 'fs';
 import path from 'path';
 
-const srcApiDir = path.join(process.cwd(), 'src/app/api');
-const distDir = path.join(process.cwd(), 'dist');
-
-// Create dist directory
-if (!fs.existsSync(distDir)) {
-  fs.mkdirSync(distDir, { recursive: true });
-}
-
-// Check if src/app/api exists
-if (!fs.existsSync(srcApiDir)) {
-  console.log('📦 No API routes found');
-  process.exit(0);
-}
-
-const apiFiles = fs.readdirSync(srcApiDir).filter(f => /\.(js|ts)$/.test(f));
-
-console.log(`📦 Building ${apiFiles.length} API routes...\n`);
-
-// Get project name
 const packageJsonPath = path.join(process.cwd(), 'package.json');
 let projectName = 'my-bini-app';
 
@@ -33,8 +14,8 @@ if (fs.existsSync(packageJsonPath)) {
   }
 }
 
-// Create a simple worker that handles all API routes
-let workerCode = `// Cloudflare Worker for ${projectName}
+// Create a simple worker that handles API routes and serves static files
+const workerCode = `// Cloudflare Worker for ${projectName}
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -54,15 +35,11 @@ export default {
             status: 200,
             headers: { 
               'Content-Type': 'application/json',
-              'Access-Control-Allow-Origin': '*',
-              'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-              'Access-Control-Allow-Headers': 'Content-Type, Authorization'
+              'Access-Control-Allow-Origin': '*'
             }
           }
         );
       }
-      
-      // Add more API routes here as needed
       
       return new Response(
         JSON.stringify({ error: 'API route not found' }),
@@ -73,8 +50,12 @@ export default {
       );
     }
 
-    // Serve static assets from the dist folder
-    return env.ASSETS.fetch(request);
+    // For static assets, we'll use the site feature
+    // This requires the [site] configuration in wrangler.toml
+    return new Response('Static site should be served via [site] configuration', {
+      status: 200,
+      headers: { 'Content-Type': 'text/html' }
+    });
   }
 };
 `;
@@ -83,18 +64,17 @@ export default {
 fs.writeFileSync(path.join(process.cwd(), 'worker.js'), workerCode);
 console.log('✅ worker.js created');
 
-// Create proper wrangler.toml for Worker with assets
+// Fixed wrangler.toml with proper TOML syntax
 const wranglerToml = `name = "${projectName}"
 compatibility_date = "2025-11-28"
 main = "worker.js"
 
 [env.production]
-vars = { 
-  ENVIRONMENT = "production"
-}
+vars = { ENVIRONMENT = "production" }
 
 [site]
 bucket = "./dist"
+entry-point = "workers-site"
 `;
 
 fs.writeFileSync(path.join(process.cwd(), 'wrangler.toml'), wranglerToml);
@@ -102,9 +82,5 @@ console.log('✅ wrangler.toml generated');
 
 console.log('\n✨ Build complete!');
 console.log('📁 Frontend: dist/');
-console.log('🔗 API endpoints:');
-apiFiles.forEach(file => {
-  const routeName = path.basename(file, path.extname(file));
-  console.log(`   • /api/${routeName}`);
-});
+console.log('🔗 API endpoint: /api/hello');
 console.log('\n🚀 To deploy: npx wrangler deploy');
