@@ -49,13 +49,6 @@ export default {
         }
       );
     }
-    
-    // For static assets, we'll use the site feature
-    // This requires the [site] configuration in wrangler.toml
-    return new Response('Static site should be served via [site] configuration', {
-      status: 200,
-      headers: { 'Content-Type': 'text/html' }
-    });
   }
 };
 `;
