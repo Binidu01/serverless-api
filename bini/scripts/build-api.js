@@ -26,8 +26,12 @@ const apiFiles = fs.readdirSync(srcApiDir).filter(f => /\.(js|ts|mjs)$/.test(f))
 
 console.log(`\n📦 Building ${apiFiles.length} API routes for both Netlify & Cloudflare...\n`);
 
+// Store all route names for configuration
+const routeNames = [];
+
 apiFiles.forEach(file => {
   const routeName = path.basename(file, path.extname(file));
+  routeNames.push(routeName);
   const srcPath = path.join(srcApiDir, file);
 
   // Read source
@@ -263,43 +267,43 @@ export default {
 });
 
 // ============================================
-// AUTO-GENERATE NETLIFY.TOML
+// AUTO-GENERATE NETLIFY.TOML (For Netlify CI/CD)
 // ============================================
 
 const netlifyTomlPath = path.join(rootDir, 'netlify.toml');
+
 const netlifyTomlContent = `[build]
-command = "pnpm run build"
-publish = "dist"
-functions = "netlify/functions"
+  command = "pnpm run build"
+  publish = "dist"
+  functions = "netlify/functions"
 
 [build.environment]
-NODE_VERSION = "22.16.0"
-PNPM_VERSION = "10.11.1"
+  NODE_VERSION = "22.16.0"
+  PNPM_VERSION = "10.11.1"
 
 [[redirects]]
-from = "/api/*"
-to = "/.netlify/functions/:splat"
-status = 200
+  from = "/api/*"
+  to = "/.netlify/functions/:splat"
+  status = 200
 
 [[headers]]
-for = "/*"
-[headers.values]
-Cache-Control = "public, max-age=3600"
+  for = "/*"
+  [headers.values]
+    Cache-Control = "public, max-age=3600"
 
 [[headers]]
-for = "/dist/*"
-[headers.values]
-Cache-Control = "public, max-age=31536000, immutable"
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
 `;
 
 fs.writeFileSync(netlifyTomlPath, netlifyTomlContent);
 console.log(`  ✅ netlify.toml generated\n`);
 
 // ============================================
-// AUTO-GENERATE WRANGLER.JSONC
+// AUTO-GENERATE CLOUDFLARE PAGES CONFIG
 // ============================================
 
-const wranglerPath = path.join(rootDir, 'wrangler.jsonc');
 const packageJsonPath = path.join(rootDir, 'package.json');
 let projectName = 'my-bini-app';
 
@@ -312,29 +316,146 @@ if (fs.existsSync(packageJsonPath)) {
   }
 }
 
-const wranglerJsoncContent = `{
-  "name": "${projectName}",
-  "compatibility_date": "2025-11-28",
-  "pages_build_caching": true,
-  "build": {
-    "command": "pnpm run build",
-    "cwd": "./",
-    "root_dir": "dist"
-  },
-  "env": {
-    "production": {
-      "routes": [
-        {
-          "pattern": "/api/*"
-        }
-      ]
-    }
-  }
-}
+// For Cloudflare Pages CI/CD - they auto-detect functions in /functions
+const wranglerTomlPath = path.join(rootDir, 'wrangler.toml');
+const wranglerTomlContent = `name = "${projectName}"
+compatibility_date = "2025-11-28"
+
+[build]
+  command = "pnpm run build"
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
 `;
 
-fs.writeFileSync(wranglerPath, wranglerJsoncContent);
-console.log(`  ✅ wrangler.jsonc generated\n`);
+fs.writeFileSync(wranglerTomlPath, wranglerTomlContent);
+console.log(`  ✅ wrangler.toml generated\n`);
+
+// ============================================
+// CREATE CLOUDFLARE PAGES _routes.json
+// ============================================
+
+const routesJsonPath = path.join(rootDir, 'functions', '_routes.json');
+const routesJsonContent = {
+  version: 1,
+  include: [
+    "/*"
+  ],
+  exclude: [
+    "/_build/",
+    "/favicon.ico",
+    "/robots.txt",
+    "/sitemap.xml"
+  ]
+};
+
+fs.writeFileSync(routesJsonPath, JSON.stringify(routesJsonContent, null, 2));
+console.log(`  ✅ functions/_routes.json generated\n`);
+
+// ============================================
+// CREATE CLOUDFLARE PAGES _headers.json
+// ============================================
+
+const headersJsonPath = path.join(rootDir, 'functions', '_headers.json');
+const headersJsonContent = {
+  "/api/*": {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization"
+  }
+};
+
+fs.writeFileSync(headersJsonPath, JSON.stringify(headersJsonContent, null, 2));
+console.log(`  ✅ functions/_headers.json generated\n`);
+
+// ============================================
+// UPDATE PACKAGE.JSON FOR PLATFORM CI/CD
+// ============================================
+
+if (fs.existsSync(packageJsonPath)) {
+  try {
+    const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'));
+    
+    // Ensure build script exists
+    packageJson.scripts = packageJson.scripts || {};
+    packageJson.scripts.build = packageJson.scripts.build || "node bini/scripts/build-api.js && vite build";
+    
+    fs.writeFileSync(packageJsonPath, JSON.stringify(packageJson, null, 2));
+    console.log(`  ✅ package.json build script verified\n`);
+  } catch (e) {
+    console.log(`  ⚠️  Could not update package.json: ${e.message}\n`);
+  }
+}
+
+// ============================================
+// CREATE PLATFORM DETECTION SCRIPT
+// ============================================
+
+const platformScriptPath = path.join(rootDir, 'bini', 'scripts', 'detect-platform.js');
+const platformScriptContent = `#!/usr/bin/env node
+// Platform detection for CI/CD
+const isNetlify = process.env.NETLIFY === 'true';
+const isCloudflarePages = process.env.CF_PAGES === 'true';
+const isVercel = process.env.VERCEL === '1';
+
+console.log('🔍 Detected Platform:', {
+  netlify: isNetlify,
+  cloudflarePages: isCloudflarePages,
+  vercel: isVercel,
+  node: process.version
+});
+
+// Export for use in build scripts
+module.exports = { isNetlify, isCloudflarePages, isVercel };
+`;
+
+// Ensure directory exists
+const platformScriptDir = path.dirname(platformScriptPath);
+if (!fs.existsSync(platformScriptDir)) {
+  fs.mkdirSync(platformScriptDir, { recursive: true });
+}
+fs.writeFileSync(platformScriptPath, platformScriptContent);
+console.log(`  ✅ Platform detection script created\n`);
+
+// ============================================
+// CREATE DEPLOYMENT GUIDE
+// ============================================
+
+const deployGuidePath = path.join(rootDir, 'DEPLOYMENT.md');
+const deployGuideContent = `# Deployment Guide
+
+## Netlify CI/CD
+1. Connect your GitHub repo to Netlify
+2. Netlify will auto-detect \`netlify.toml\`
+3. Auto-deploys on git push
+
+## Cloudflare Pages CI/CD  
+1. Connect your GitHub repo to Cloudflare Pages
+2. Build command: \`pnpm run build\`
+3. Build output: \`dist\`
+4. Functions directory: \`functions\`
+5. Auto-deploys on git push
+
+## Environment Setup
+Both platforms will automatically:
+- Install dependencies using \`pnpm install\`
+- Run \`pnpm run build\`
+- Deploy the \`dist\` folder
+- Deploy API routes from \`functions/\` directory
+
+## API Routes
+Your API routes are available at:
+- Netlify: \`/api/{route-name}\`
+- Cloudflare: \`/api/{route-name}\`
+
+Available routes:
+${routeNames.map(name => `- /api/${name}`).join('\n')}
+`;
+
+fs.writeFileSync(deployGuidePath, deployGuideContent);
+console.log(`  ✅ DEPLOYMENT.md guide created\n`);
 
 // ============================================
 // SUMMARY
@@ -342,9 +463,17 @@ console.log(`  ✅ wrangler.jsonc generated\n`);
 
 console.log(`✨ Build complete!\n`);
 console.log(`📂 Frontend: dist/\n`);
-console.log(`📁 Netlify Functions: netlify/functions/\n`);
-console.log(`📁 Cloudflare Functions: functions/\n`);
-console.log(`⚙️  Config Files Generated:\n`);
-console.log(`   📄 netlify.toml\n`);
-console.log(`   📄 wrangler.jsonc\n`);
-console.log(`🚀 Ready to push to GitHub! Both platforms will auto-deploy.\n`);
+console.log(`📁 Netlify Functions: netlify/functions/ (${routeNames.length} routes)`);
+console.log(`📁 Cloudflare Pages Functions: functions/ (${routeNames.length} routes)\n`);
+console.log(`⚙️  Auto-generated Configs:\n`);
+console.log(`   📄 netlify.toml - Netlify CI/CD config`);
+console.log(`   📄 wrangler.toml - Cloudflare Pages config`);
+console.log(`   📄 functions/_routes.json - CF Pages routing`);
+console.log(`   📄 functions/_headers.json - API CORS headers`);
+console.log(`   📄 DEPLOYMENT.md - Deployment guide\n`);
+console.log(`🚀 CI/CD Ready:\n`);
+console.log(`   Both platforms will auto-deploy when you push to GitHub`);
+console.log(`   No manual deploy commands needed!\n`);
+console.log(`🔗 Your API endpoints:\n`);
+routeNames.forEach(name => console.log(`   • /api/${name}`));
+console.log(`\n`);
