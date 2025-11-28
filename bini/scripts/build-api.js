@@ -7,6 +7,7 @@ const srcApiDir = path.join(process.cwd(), 'src/app/api');
 const netlifyFunctionsDir = path.join(process.cwd(), 'netlify/functions');
 const cloudflareFunctionsDir = path.join(process.cwd(), 'functions');
 const distDir = path.join(process.cwd(), 'dist');
+const rootDir = process.cwd();
 
 // Create directories
 [netlifyFunctionsDir, cloudflareFunctionsDir, distDir].forEach(dir => {
@@ -261,8 +262,89 @@ export default {
   console.log(`     ☁️  Cloudflare: functions/${routeName}.js\n`);
 });
 
+// ============================================
+// AUTO-GENERATE NETLIFY.TOML
+// ============================================
+
+const netlifyTomlPath = path.join(rootDir, 'netlify.toml');
+const netlifyTomlContent = `[build]
+command = "pnpm run build"
+publish = "dist"
+functions = "netlify/functions"
+
+[build.environment]
+NODE_VERSION = "22.16.0"
+PNPM_VERSION = "10.11.1"
+
+[[redirects]]
+from = "/api/*"
+to = "/.netlify/functions/:splat"
+status = 200
+
+[[headers]]
+for = "/*"
+[headers.values]
+Cache-Control = "public, max-age=3600"
+
+[[headers]]
+for = "/dist/*"
+[headers.values]
+Cache-Control = "public, max-age=31536000, immutable"
+`;
+
+fs.writeFileSync(netlifyTomlPath, netlifyTomlContent);
+console.log(`  ✅ netlify.toml generated\n`);
+
+// ============================================
+// AUTO-GENERATE WRANGLER.JSONC
+// ============================================
+
+const wranglerPath = path.join(rootDir, 'wrangler.jsonc');
+const packageJsonPath = path.join(rootDir, 'package.json');
+let projectName = 'my-bini-app';
+
+if (fs.existsSync(packageJsonPath)) {
+  try {
+    const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'));
+    projectName = packageJson.name || projectName;
+  } catch (e) {
+    // Use default if package.json parsing fails
+  }
+}
+
+const wranglerJsoncContent = `{
+  "name": "${projectName}",
+  "compatibility_date": "2025-11-28",
+  "pages_build_caching": true,
+  "build": {
+    "command": "pnpm run build",
+    "cwd": "./",
+    "root_dir": "dist"
+  },
+  "env": {
+    "production": {
+      "routes": [
+        {
+          "pattern": "/api/*"
+        }
+      ]
+    }
+  }
+}
+`;
+
+fs.writeFileSync(wranglerPath, wranglerJsoncContent);
+console.log(`  ✅ wrangler.jsonc generated\n`);
+
+// ============================================
+// SUMMARY
+// ============================================
+
 console.log(`✨ Build complete!\n`);
 console.log(`📂 Frontend: dist/\n`);
 console.log(`📁 Netlify Functions: netlify/functions/\n`);
 console.log(`📁 Cloudflare Functions: functions/\n`);
+console.log(`⚙️  Config Files Generated:\n`);
+console.log(`   📄 netlify.toml\n`);
+console.log(`   📄 wrangler.jsonc\n`);
 console.log(`🚀 Ready to push to GitHub! Both platforms will auto-deploy.\n`);
