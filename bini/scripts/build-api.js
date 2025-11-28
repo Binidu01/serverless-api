@@ -49,6 +49,9 @@ export default {
         }
       );
     }
+    
+    // All other requests are handled by the [site] configuration
+    return env.ASSETS.fetch(request);
   }
 };
 `;
